@@ -445,7 +445,12 @@ class PipelineArchitect:
         self.scorer = QualityScorer(target=quality_target)
 
     def _map_skills(self, concept: ArchitectConcept) -> Dict[str, List[str]]:
-        """Map required skills to pipeline phases."""
+        """Map required skills to pipeline phases with smart selection.
+        
+        Selects skills based on domain, complexity, and quality target.
+        Higher complexity gets more skills; higher quality target gets
+        more verification skills.
+        """
         skill_map: Dict[str, List[str]] = {}
 
         # Always include core skills
@@ -455,29 +460,50 @@ class PipelineArchitect:
             "context-capsule",
         ]
 
-        # Domain-specific skills
+        # Domain-specific skills - select based on complexity
         domain = concept.domain
         if domain in SKILL_CATEGORIES:
-            skill_map[domain] = [s["name"] for s in SKILL_CATEGORIES[domain][:3]]
+            domain_skills = SKILL_CATEGORIES[domain]
+            # More complex concepts need more skills
+            count = min(len(domain_skills), max(2, concept.complexity // 2))
+            skill_map[domain] = [s["name"] for s in domain_skills[:count]]
 
         # Add requested skills
         if concept.required_skills:
             skill_map["requested"] = concept.required_skills
 
+        # Add verification skills for high quality targets
+        if concept.quality_target >= 8.0:
+            skill_map.setdefault("verification", []).extend([
+                "production-readiness-gate",
+                "verification-before-completion",
+            ])
+
         return skill_map
 
     def _map_connectors(self, concept: ArchitectConcept) -> Dict[str, List[str]]:
-        """Map required connectors to pipeline phases."""
+        """Map required connectors to pipeline phases.
+        
+        Each connector gets implement + verify phases.
+        High complexity concepts get additional connector phases.
+        """
         connector_map: Dict[str, List[str]] = {}
 
         for connector in concept.required_connectors:
             if connector in CONNECTORS:
-                connector_map[connector] = ["implement", "verify"]
+                phases = ["implement", "verify"]
+                if concept.complexity >= 7:
+                    phases.extend(["test", "deploy"])
+                connector_map[connector] = phases
 
         return connector_map
 
     def _design_thinking_chains(self, concept: ArchitectConcept) -> List[Dict[str, Any]]:
-        """Design sequential thinking chains for complex units."""
+        """Design sequential thinking chains for complex units.
+        
+        Creates thinking chains for high-complexity concepts.
+        Validates each chain and includes confidence scores.
+        """
         chains = []
 
         if concept.complexity >= 7:
@@ -489,6 +515,19 @@ class PipelineArchitect:
                 "confidence": chain.confidence,
                 "validation": validation,
             })
+
+        # Add secondary chains for very complex concepts
+        if concept.complexity >= 9:
+            for phase in ["design", "implementation", "verification"]:
+                sub_chain = self.thinking_enforcer.create_chain(
+                    f"{concept.name} - {phase}"
+                )
+                chains.append({
+                    "unit": f"{concept.name} - {phase}",
+                    "steps": sub_chain.steps,
+                    "confidence": sub_chain.confidence,
+                    "validation": self.thinking_enforcer.validate_chain(sub_chain),
+                })
 
         return chains
 
@@ -593,51 +632,86 @@ class PipelineArchitect:
         return phases
 
     def architect(self, concept: ArchitectConcept) -> ArchitectResult:
-        """Build a production-grade pipeline from a concept."""
+        """Build a production-grade pipeline from a concept.
+        
+        Handles empty concepts by using defaults.
+        
+        Raises:
+            ValueError: If quality target is out of range.
+        """
         start = time.monotonic()
 
-        # Step 1: Map skills
-        skill_map = self._map_skills(concept)
+        try:
+            # Validate concept - use defaults for empty values
+            if not concept.name:
+                concept = ArchitectConcept(
+                    name="unnamed",
+                    purpose=concept.purpose or "No purpose specified",
+                    domain=concept.domain,
+                    complexity=concept.complexity,
+                    quality_target=concept.quality_target,
+                    required_skills=concept.required_skills,
+                    required_connectors=concept.required_connectors,
+                )
+            if not concept.purpose:
+                concept = ArchitectConcept(
+                    name=concept.name,
+                    purpose="No purpose specified",
+                    domain=concept.domain,
+                    complexity=concept.complexity,
+                    quality_target=concept.quality_target,
+                    required_skills=concept.required_skills,
+                    required_connectors=concept.required_connectors,
+                )
+            if concept.quality_target < 0 or concept.quality_target > 10:
+                raise ValueError("Quality target must be between 0 and 10")
 
-        # Step 2: Map connectors
-        connector_map = self._map_connectors(concept)
+            # Step 1: Map skills
+            skill_map = self._map_skills(concept)
 
-        # Step 3: Design thinking chains
-        thinking_chains = self._design_thinking_chains(concept)
+            # Step 2: Map connectors
+            connector_map = self._map_connectors(concept)
 
-        # Step 4: Design phases
-        phases = self._design_phases(concept, skill_map, connector_map)
+            # Step 3: Design thinking chains
+            thinking_chains = self._design_thinking_chains(concept)
 
-        # Step 5: Assemble pipeline
-        pipeline = {
-            "name": concept.name,
-            "description": concept.purpose,
-            "version": "1.0",
-            "phases": phases,
-            "quality": {
-                "target": concept.quality_target,
-                "dimensions": ["completeness", "correctness", "clarity", "confidence", "coherence"],
-            },
-        }
+            # Step 4: Design phases
+            phases = self._design_phases(concept, skill_map, connector_map)
 
-        # Step 6: Score quality
-        quality_score = self.scorer.score_pipeline(pipeline)
+            # Step 5: Assemble pipeline
+            pipeline = {
+                "name": concept.name,
+                "description": concept.purpose,
+                "version": "1.0",
+                "phases": phases,
+                "quality": {
+                    "target": concept.quality_target,
+                    "dimensions": ["completeness", "correctness", "clarity", "confidence", "coherence"],
+                },
+            }
 
-        # Step 7: Validate
-        validation = self.scorer.validate(quality_score)
+            # Step 6: Score quality
+            quality_score = self.scorer.score_pipeline(pipeline)
 
-        duration = (time.monotonic() - start) * 1000
+            # Step 7: Validate
+            validation = self.scorer.validate(quality_score)
 
-        return ArchitectResult(
-            concept=concept,
-            pipeline=pipeline,
-            thinking_chains=thinking_chains,
-            skill_map=skill_map,
-            connector_map=connector_map,
-            quality_score=quality_score,
-            validation=validation,
-            duration_ms=duration,
-        )
+            duration = (time.monotonic() - start) * 1000
+
+            return ArchitectResult(
+                concept=concept,
+                pipeline=pipeline,
+                thinking_chains=thinking_chains,
+                skill_map=skill_map,
+                connector_map=connector_map,
+                quality_score=quality_score,
+                validation=validation,
+                duration_ms=duration,
+            )
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Pipeline architect failed: {e}") from e
 
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────
