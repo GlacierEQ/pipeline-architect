@@ -234,7 +234,15 @@ class QualityScorer:
         self.target = target
 
     def score_phase(self, phase: Dict[str, Any]) -> QualityScore:
-        """Score a single phase."""
+        """Score a single phase with smart heuristics.
+        
+        Considers:
+        - Completeness: all required fields present
+        - Correctness: evidence is specific and sufficient
+        - Clarity: name is descriptive, type specified
+        - Confidence: has quality gate and skills
+        - Coherence: connects to other phases via inputs/outputs
+        """
         score = QualityScore()
 
         # Completeness: has all required fields
@@ -264,19 +272,66 @@ class QualityScorer:
         return score
 
     def score_pipeline(self, pipeline: Dict[str, Any]) -> QualityScore:
-        """Score a full pipeline."""
+        """Score a full pipeline with smart aggregation.
+        
+        Weights later phases more heavily (they represent final quality).
+        Penalizes missing verification phases.
+        """
         phases = pipeline.get("phases", [])
         if not phases:
             return QualityScore()
 
         phase_scores = [self.score_phase(p) for p in phases]
 
+        # Weighted average: later phases count more
+        n = len(phase_scores)
+        weights = [1.0 + i * 0.1 for i in range(n)]  # Increasing weights
+        total_weight = sum(weights)
+
         avg = QualityScore()
-        avg.completeness = sum(s.completeness for s in phase_scores) / len(phase_scores)
-        avg.correctness = sum(s.correctness for s in phase_scores) / len(phase_scores)
-        avg.clarity = sum(s.clarity for s in phase_scores) / len(phase_scores)
-        avg.confidence = sum(s.confidence for s in phase_scores) / len(phase_scores)
-        avg.coherence = sum(s.coherence for s in phase_scores) / len(phase_scores)
+        for i, score in enumerate(phase_scores):
+            w = weights[i] / total_weight
+            avg.completeness += score.completeness * w
+            avg.correctness += score.correctness * w
+            avg.clarity += score.clarity * w
+            avg.confidence += score.confidence * w
+            avg.coherence += score.coherence * w
+
+        # Bonus for having verification phases
+        has_verify = any(p.get("name") == "verify" for p in phases)
+        has_gate = any("quality_gate" in p for p in phases)
+        if has_verify:
+            avg.confidence = min(10, avg.confidence + 0.5)
+        if has_gate:
+            avg.correctness = min(10, avg.correctness + 0.5)
+
+        return avg
+
+    def score_concept(self, concept: Any) -> QualityScore:
+        """Score a concept for pipeline design quality.
+        
+        Higher complexity and quality target get higher scores.
+        """
+        score = QualityScore()
+
+        # Completeness: concept has all required fields
+        score.completeness = 8.0 if concept.name and concept.purpose else 4.0
+
+        # Correctness: quality target is reasonable
+        score.correctness = min(10, concept.quality_target)
+
+        # Clarity: domain is specified
+        score.clarity = 8.0 if concept.domain else 4.0
+
+        # Confidence: complexity is appropriate
+        score.confidence = min(10, 5 + concept.complexity * 0.5)
+
+        # Coherence: required skills and connectors are specified
+        skill_count = len(concept.required_skills) if concept.required_skills else 0
+        connector_count = len(concept.required_connectors) if concept.required_connectors else 0
+        score.coherence = min(10, 5 + (skill_count * 0.5) + (connector_count * 0.5))
+
+        return score
 
         return avg
 
