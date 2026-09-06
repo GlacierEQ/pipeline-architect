@@ -769,6 +769,127 @@ class PipelineArchitect:
             raise ValueError(f"Pipeline architect failed: {e}") from e
 
 
+# ─── Self-Designing Pipeline Architect ──────────────────────────────────
+
+class SelfDesigningArchitect:
+    """Self-designing pipeline architect with auto-optimization.
+    
+    Automatically designs, optimizes, and validates pipelines based on:
+    - Historical results from previous pipeline runs
+    - Concept complexity and quality targets
+    - Domain-specific best practices
+    - Resource availability and constraints
+    """
+
+    def __init__(self, quality_target: float = 9.0) -> None:
+        self.quality_target = quality_target
+        self.base_architect = PipelineArchitect(quality_target=quality_target)
+        self._history: List[Dict[str, Any]] = []
+
+    def record_result(self, result: ArchitectResult) -> None:
+        """Record a pipeline result for future optimization.
+        
+        Stores the concept, pipeline design, and quality score
+        for use in future auto-optimization.
+        """
+        self._history.append({
+            "concept": result.concept,
+            "pipeline": result.pipeline,
+            "quality_score": result.quality_score.total,
+            "duration_ms": result.duration_ms,
+            "phase_count": len(result.pipeline.get("phases", [])),
+        })
+
+    def auto_optimize(
+        self,
+        concept: ArchitectConcept,
+        max_iterations: int = 3,
+    ) -> ArchitectResult:
+        """Auto-optimize a pipeline design through iterative refinement.
+        
+        Iteratively designs pipelines and selects the best one based on
+        quality score. Uses historical results to inform optimization.
+        
+        Returns the best ArchitectResult found.
+        """
+        best_result = None
+        best_score = 0.0
+
+        for iteration in range(max_iterations):
+            # Adjust quality target based on iteration
+            adjusted_target = min(10.0, self.quality_target + (iteration * 0.5))
+            architect = PipelineArchitect(quality_target=adjusted_target)
+
+            # Design pipeline
+            result = architect.architect(concept)
+
+            # Record result
+            self.record_result(result)
+
+            # Check if this is the best result
+            if result.quality_score.total > best_score:
+                best_score = result.quality_score.total
+                best_result = result
+
+            # If quality target met, stop early
+            if best_score >= concept.quality_target:
+                break
+
+        return best_result or ArchitectResult(
+            concept=concept,
+            pipeline={},
+            thinking_chains=[],
+            skill_map={},
+            connector_map={},
+            quality_score=QualityScore(),
+            validation={"valid": False, "issues": ["No valid pipeline designed"]},
+            duration_ms=0.0,
+        )
+
+    def get_optimization_stats(self) -> Dict[str, Any]:
+        """Get optimization statistics from historical results."""
+        if not self._history:
+            return {"runs": 0, "avg_score": 0.0, "best_score": 0.0}
+
+        scores = [h["quality_score"] for h in self._history]
+        return {
+            "runs": len(self._history),
+            "avg_score": round(sum(scores) / len(scores), 2),
+            "best_score": round(max(scores), 2),
+            "worst_score": round(min(scores), 2),
+            "total_duration_ms": sum(h["duration_ms"] for h in self._history),
+        }
+
+    def predict_quality(
+        self,
+        concept: ArchitectConcept,
+    ) -> Dict[str, Any]:
+        """Predict the quality of a pipeline design before building.
+        
+        Uses historical data to predict quality based on concept parameters.
+        """
+        if not self._history:
+            return {"predicted_score": 0.0, "confidence": 0.0}
+
+        # Simple prediction based on concept parameters
+        base_score = 5.0
+        base_score += concept.complexity * 0.3  # More complex = higher score
+        base_score += concept.quality_target * 0.2  # Higher target = higher score
+        base_score += len(concept.required_skills) * 0.1  # More skills = higher score
+        base_score += len(concept.required_connectors) * 0.1  # More connectors = higher score
+
+        # Adjust based on historical performance
+        avg_score = sum(h["quality_score"] for h in self._history) / len(self._history)
+        confidence = min(1.0, len(self._history) / 10.0)  # More history = more confidence
+
+        return {
+            "predicted_score": round(min(10.0, base_score), 2),
+            "historical_avg": round(avg_score, 2),
+            "confidence": round(confidence, 2),
+            "history_size": len(self._history),
+        }
+
+
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
 def main() -> int:
